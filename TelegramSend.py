@@ -1,6 +1,10 @@
 import os
+from typing import List, Tuple
 import json
+from itertools import islice
 from io import BytesIO
+from dataclasses import dataclass
+import traceback
 
 from PIL import Image
 import numpy as np
@@ -12,18 +16,66 @@ import folder_paths
 from urllib3 import HTTPSConnectionPool
 
 telegram_host = "api.telegram.org"
+telegram_timeout = 10
 
 
-def send_picture(bot_token: str, chat_id: str, filename: str, picture: bytes, file_format: str) -> None:
-    request = HTTPSConnectionPool(host=telegram_host, timeout=10)
-    request.request_encode_body(
+def batched(iterable, n):
+    it = iter(iterable)
+    while batch := tuple(islice(it, n)):
+        yield batch
+
+
+@dataclass
+class BotImage:
+
+    filename: str
+    picture: bytes
+    file_format: str
+
+
+def send_picture(bot_token: str, chat_id: str, image: BotImage, as_file: bool = False) -> None:
+    request = HTTPSConnectionPool(host=telegram_host, timeout=telegram_timeout)
+    if not as_file:
+        response = request.request_encode_body(
+            method='POST',
+            url=f"/bot{bot_token}/sendPhoto",
+            fields={
+                "chat_id": chat_id,
+                "photo": (image.filename, image.picture, image.file_format)
+            }
+        )
+    else:
+        response = request.request_encode_body(
+            method='POST',
+            url=f"/bot{bot_token}/sendDocument",
+            fields={
+                "chat_id": chat_id,
+                "document": (image.filename, image.picture, image.file_format)
+            }
+        )
+    print(response.data)
+
+
+def media_item(image: BotImage, as_file: bool = False) -> dict:
+    return {"type": "document" if as_file else "photo", "media": f"attach://{image.filename}"}
+
+
+def multipart_item(image: BotImage) -> Tuple[str, tuple]:
+    return (image.filename, (image.filename, image.picture, image.file_format))
+
+
+def send_pictures_group(bot_token: str, chat_id: str, images: List[BotImage], as_file: bool = False) -> None:
+    request = HTTPSConnectionPool(host=telegram_host, timeout=telegram_timeout)
+    response = request.request_encode_body(
         method='POST',
-        url=f"/bot{bot_token}/sendPhoto",
+        url=f"/bot{bot_token}/sendMediaGroup",
         fields={
             "chat_id": chat_id,
-            "photo": (filename, picture, file_format)
+            "media": json.dumps(list(map(lambda i: media_item(i, as_file=as_file), images))),
+            **dict(map(multipart_item, images))
         }
     )
+    print(response.data)
 
 
 class TelegramSend:
@@ -38,6 +90,8 @@ class TelegramSend:
                 {"images": ("IMAGE", ),
                  "bot_token": ("STRING", {"default": ""}),
                  "chat_id": ("STRING", {"default": ""}),
+                 "send_object": (["as_photo", "as_document"],),
+                 "send_count": (["by_one", "by_groups"],),
                  "filename_prefix": ("STRING", {"default": "ComfyUITG"})},
                 "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
                 }
@@ -49,11 +103,15 @@ class TelegramSend:
 
     CATEGORY = "image"
 
-    def send_images(self, images, bot_token, chat_id, filename_prefix="ComfyUITG", prompt=None, extra_pnginfo=None):
+    def send_images(self, images, bot_token: str, chat_id: str, send_object: str, send_count: str, filename_prefix: str = "ComfyUITG", prompt=None, extra_pnginfo=None):
+
         filename_prefix += self.prefix_append
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
             filename_prefix, self.output_dir, images[0].shape[1], images[0].shape[0])
+
         results = list()
+        bot_results = list()
+
         for image in images:
             i = 255. * image.cpu().numpy()
             img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
@@ -77,18 +135,36 @@ class TelegramSend:
             with open(os.path.join(full_output_folder, file), "wb") as f:
                 f.write(bytes_file.getbuffer())
 
-            try:
-                send_picture(bot_token, chat_id, file,
-                             bytes_file.getvalue(), "image/png")
-            except:
-                print('Send TG error')
+            bot_results.append(BotImage(
+                filename=file,
+                picture=bytes_file.getvalue(),
+                file_format="image/png"
+            ))
 
             results.append({
                 "filename": file,
                 "subfolder": subfolder,
                 "type": self.type
             })
+
             counter += 1
+
+        if bot_results:
+
+            if len(bot_results) == 1 or send_count != "by_groups":
+                for bot_res in bot_results:
+                    try:
+                        send_picture(bot_token, chat_id, bot_res,
+                                     as_file=send_object == "as_document")
+                    except:
+                        traceback.print_exc()
+            else:
+                for bot_res in batched(bot_results, 10):
+                    try:
+                        send_pictures_group(
+                            bot_token, chat_id, bot_res, as_file=send_object == "as_document")
+                    except:
+                        traceback.print_exc()
 
         return {"ui": {"images": results}}
 
