@@ -8,6 +8,7 @@ import numpy as np
 
 from urllib3 import PoolManager
 
+send_timeout = 30
 
 class OurApiSend:
 
@@ -39,6 +40,8 @@ class OurApiSend:
 
             bytes_file.seek(0)
 
+            print(f'Send image with id - {id}')
+
             try:
 
                 encoded_body = json.dumps({
@@ -52,7 +55,8 @@ class OurApiSend:
                     'POST',
                     callback_url,
                     headers={'Content-Type': 'application/json'},
-                    body=encoded_body
+                    body=encoded_body,
+                    timeout=send_timeout
                 )
 
             except:
