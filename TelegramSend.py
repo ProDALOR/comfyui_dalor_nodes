@@ -1,5 +1,6 @@
 import os
 from typing import List, Tuple
+import time
 import json
 from itertools import islice
 from io import BytesIO
@@ -16,7 +17,14 @@ import folder_paths
 from urllib3 import HTTPSConnectionPool
 
 telegram_host = "api.telegram.org"
-telegram_timeout = 10
+default_telegram_timeout = 60
+
+
+def load_response(resp) -> dict:
+    try:
+        return json.loads(resp.data)
+    except:
+        return {}
 
 
 def batched(iterable, n):
@@ -33,10 +41,13 @@ class BotImage:
     file_format: str
 
 
-def send_picture(bot_token: str, chat_id: str, image: BotImage, as_file: bool = False) -> None:
-    request = HTTPSConnectionPool(host=telegram_host, timeout=telegram_timeout)
+def send_picture(bot_token: str, chat_id: str, image: BotImage, as_file: bool = False, telegram_timeout: float = default_telegram_timeout) -> None:
+    request = HTTPSConnectionPool(
+        host=telegram_host,
+        timeout=telegram_timeout
+    )
     if not as_file:
-        response = request.request_encode_body(
+        resp = request.request_encode_body(
             method='POST',
             url=f"/bot{bot_token}/sendPhoto",
             fields={
@@ -45,7 +56,7 @@ def send_picture(bot_token: str, chat_id: str, image: BotImage, as_file: bool = 
             }
         )
     else:
-        response = request.request_encode_body(
+        resp = request.request_encode_body(
             method='POST',
             url=f"/bot{bot_token}/sendDocument",
             fields={
@@ -53,7 +64,14 @@ def send_picture(bot_token: str, chat_id: str, image: BotImage, as_file: bool = 
                 "document": (image.filename, image.picture, image.file_format)
             }
         )
-    print(response.data)
+    response = load_response(resp)
+    if response.get('ok'):
+        return
+    else:
+        retry_after = response.get('parameters', {}).get('retry_after', 0)
+        if retry_after:
+            time.sleep(retry_after)
+            send_picture(bot_token, chat_id, image, as_file, telegram_timeout)
 
 
 def media_item(image: BotImage, as_file: bool = False) -> dict:
@@ -64,9 +82,12 @@ def multipart_item(image: BotImage) -> Tuple[str, tuple]:
     return (image.filename, (image.filename, image.picture, image.file_format))
 
 
-def send_pictures_group(bot_token: str, chat_id: str, images: List[BotImage], as_file: bool = False) -> None:
-    request = HTTPSConnectionPool(host=telegram_host, timeout=telegram_timeout)
-    response = request.request_encode_body(
+def send_pictures_group(bot_token: str, chat_id: str, images: List[BotImage], as_file: bool = False, telegram_timeout: float = default_telegram_timeout) -> None:
+    request = HTTPSConnectionPool(
+        host=telegram_host,
+        timeout=telegram_timeout
+    )
+    resp = request.request_encode_body(
         method='POST',
         url=f"/bot{bot_token}/sendMediaGroup",
         fields={
@@ -75,7 +96,15 @@ def send_pictures_group(bot_token: str, chat_id: str, images: List[BotImage], as
             **dict(map(multipart_item, images))
         }
     )
-    print(response.data)
+    response = load_response(resp)
+    if response.get('ok'):
+        return
+    else:
+        retry_after = response.get('parameters', {}).get('retry_after', 0)
+        if retry_after:
+            time.sleep(retry_after)
+            send_pictures_group(bot_token, chat_id, images,
+                                as_file, telegram_timeout)
 
 
 class TelegramSend:
@@ -93,6 +122,7 @@ class TelegramSend:
                  "send_object": (["as_photo", "as_document"],),
                  "send_count": (["by_one", "by_groups"],),
                  "filename_prefix": ("STRING", {"default": "ComfyUITG"})},
+                "telegram_timeout": ("FLOAT", {"default": default_telegram_timeout}),
                 "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
                 }
 
@@ -103,7 +133,7 @@ class TelegramSend:
 
     CATEGORY = "image"
 
-    def send_images(self, images, bot_token: str, chat_id: str, send_object: str, send_count: str, filename_prefix: str = "ComfyUITG", prompt=None, extra_pnginfo=None):
+    def send_images(self, images, bot_token: str, chat_id: str, send_object: str, send_count: str, filename_prefix: str = "ComfyUITG", telegram_timeout: float = default_telegram_timeout, prompt=None, extra_pnginfo=None):
 
         filename_prefix += self.prefix_append
         full_output_folder, filename, counter, subfolder, filename_prefix = folder_paths.get_save_image_path(
@@ -155,14 +185,15 @@ class TelegramSend:
                 for bot_res in bot_results:
                     try:
                         send_picture(bot_token, chat_id, bot_res,
-                                     as_file=send_object == "as_document")
+                                     send_object == "as_document", telegram_timeout)
                     except:
                         traceback.print_exc()
             else:
                 for bot_res in batched(bot_results, 10):
                     try:
                         send_pictures_group(
-                            bot_token, chat_id, bot_res, as_file=send_object == "as_document")
+                            bot_token, chat_id, bot_res,
+                            send_object == "as_document", telegram_timeout)
                     except:
                         traceback.print_exc()
 
