@@ -34,6 +34,16 @@ def batched(iterable, n):
         yield batch
 
 
+def prepare_request(telegram_timeout: float = default_telegram_timeout) -> HTTPSConnectionPool:
+    return HTTPSConnectionPool(
+        host=telegram_host,
+        timeout=telegram_timeout,
+        assert_hostname=False,
+        assert_fingerprint=False,
+        cert_reqs=ssl.CERT_NONE
+    )
+
+
 @dataclass
 class BotImage:
 
@@ -43,13 +53,7 @@ class BotImage:
 
 
 def send_picture(bot_token: str, chat_id: str, image: BotImage, as_file: bool = False, telegram_timeout: float = default_telegram_timeout) -> None:
-    request = HTTPSConnectionPool(
-        host=telegram_host,
-        timeout=telegram_timeout,
-        assert_hostname=False,
-        assert_fingerprint=False,
-        cert_reqs=ssl.CERT_NONE
-    )
+    request = prepare_request(telegram_timeout)
     if not as_file:
         resp = request.request_encode_body(
             method='POST',
@@ -87,10 +91,7 @@ def multipart_item(image: BotImage) -> Tuple[str, tuple]:
 
 
 def send_pictures_group(bot_token: str, chat_id: str, images: List[BotImage], as_file: bool = False, telegram_timeout: float = default_telegram_timeout) -> None:
-    request = HTTPSConnectionPool(
-        host=telegram_host,
-        timeout=telegram_timeout
-    )
+    request = prepare_request(telegram_timeout)
     resp = request.request_encode_body(
         method='POST',
         url=f"/bot{bot_token}/sendMediaGroup",
