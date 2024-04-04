@@ -1,4 +1,5 @@
 import os
+import ssl
 from typing import List, Tuple
 import time
 import json
@@ -46,7 +47,8 @@ def send_picture(bot_token: str, chat_id: str, image: BotImage, as_file: bool = 
         host=telegram_host,
         timeout=telegram_timeout,
         assert_hostname=False,
-        assert_fingerprint=False
+        assert_fingerprint=False,
+        cert_reqs=ssl.CERT_NONE
     )
     if not as_file:
         resp = request.request_encode_body(
