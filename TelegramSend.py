@@ -44,7 +44,9 @@ class BotImage:
 def send_picture(bot_token: str, chat_id: str, image: BotImage, as_file: bool = False, telegram_timeout: float = default_telegram_timeout) -> None:
     request = HTTPSConnectionPool(
         host=telegram_host,
-        timeout=telegram_timeout
+        timeout=telegram_timeout,
+        assert_hostname=False,
+        assert_fingerprint=False
     )
     if not as_file:
         resp = request.request_encode_body(
